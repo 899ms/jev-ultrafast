@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 import sys
 import time
 from collections import defaultdict
@@ -21,7 +22,11 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from examples.flights import GOALS, URL, verify  # noqa: E402
 
 folder = Path(args.output)
-folder.mkdir(parents=True, exist_ok=True)
+folder.mkdir(parents=True, exist_ok=False)
+source_hashes = {
+    p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+    for p in (source / "jev_ultrafast").iterdir() if p.suffix in {".py", ".js"}
+}
 raw = browser_module.cdp
 calls = defaultdict(list)
 
@@ -52,10 +57,13 @@ finally:
     state["verification"] = verify(final)
     state["error"] = error
     state["cdp"] = measured_calls
-    state["source_hashes"] = {
-        p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (source / "jev_ultrafast").glob("*.py")
-    }
+    state["source_hashes"] = source_hashes
     state["task_hash"] = hashlib.sha256(json.dumps([URL, GOALS]).encode()).hexdigest()
+    state["configuration"] = {
+        key: os.environ.get(key)
+        for key in ("TYPESAFE_MODEL", "TEXT_MODEL", "TEXT_MODEL_BASE_URL", "TEXT_MODEL_REASONING")
+    }
+    state["browser_version"] = agent.browser.call("Browser.getVersion")["product"]
     state["final_page"] = final
     (folder / "state.json").write_text(json.dumps(state, indent=2))
     agent.close()

@@ -89,11 +89,11 @@ class Agent:
                 raise ValueError("Observe and choose before acting")
             # Consume once, before any mutation or model call. A retry cannot double-click.
             state["decision"] = None
-            if not state["browser"].fresh(page):
-                state["status"] = "ready"
-                raise StalePage("Page changed since the decision. Choose again.")
             selected = decision["choice"]
             if selected in {"DONE", "BLOCKED"}:
+                if not state["browser"].fresh(page):
+                    state["status"] = "ready"
+                    raise StalePage("Page changed since the decision. Choose again.")
                 state["status"] = "done" if selected == "DONE" else "blocked"
                 state["plan_index"] = int(selected == "DONE")
                 state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
@@ -104,6 +104,8 @@ class Agent:
                 raise ValueError(f"Stopped at the {MAX_STEPS}-action demo budget")
             text, helper = None, None
             if action["kind"] == "fill":
+                if not state["browser"].fresh(page):
+                    raise StalePage("Page changed before text generation. Choose again.")
                 context = field_context(state["goal"], action, page, state["history"])
                 if self.pending_text and self.pending_text[0] == context:
                     _, text, helper = self.pending_text
@@ -111,9 +113,7 @@ class Agent:
                     text, helper = field_text(context)
                     self.pending_text = (context, text, helper)
                     state["text_calls"].append({**helper, "field": action["label"], "value": text})
-            # Text generation can take seconds. Re-check freshness after it as well.
-            if text is not None and not state["browser"].fresh(page):
-                raise StalePage("Page changed while generating text. Choose again.")
+            # Browser.act checks freshness immediately before input, including after text generation.
             state["browser"].act(action, page, text=text)
             self.pending_text = None
             state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)

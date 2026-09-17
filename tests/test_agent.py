@@ -189,20 +189,20 @@ def test_stale_decision_is_consumed_before_any_mutation(runner):
 def test_generated_text_reused_only_for_identical_retry_context(runner, monkeypatch):
     helper = Mock(return_value=("book", {"model": "test", "latency_ms": 10}))
     monkeypatch.setattr(loop, "field_text", helper)
-    runner.state["browser"].fresh.side_effect = [True, False, True, True]
+    runner.state["browser"].act.side_effect = [StalePage("Changed before input"), None]
     with pytest.raises(StalePage):
         runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
     runner.state["decision"] = decision()
     runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
     assert helper.call_count == 1
-    runner.state["browser"].act.assert_called_once()
+    assert runner.state["browser"].act.call_count == 2  # The first call rejects before any browser input.
     assert runner.pending_text is None
 
 
 def test_changed_field_context_does_not_reuse_generated_text(runner, monkeypatch):
     helper = Mock(return_value=("book", {"model": "test", "latency_ms": 10}))
     monkeypatch.setattr(loop, "field_text", helper)
-    runner.state["browser"].fresh.side_effect = [True, False, True, True]
+    runner.state["browser"].act.side_effect = [StalePage("Changed before input"), None]
     with pytest.raises(StalePage):
         runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
     runner.state["page"]["text"] = "Different page context"
@@ -227,44 +227,44 @@ def test_stale_observation_preserves_executed_action(runner):
     runner.state["browser"].act.assert_called_once()
 
 
-@pytest.mark.parametrize(
-    "role,readonly,kind",
-    [
-        ("checkbox", False, "click"),
-        ("radio", False, "click"),
-        ("button", False, "click"),
-        ("combobox", False, "fill"),
-        ("textbox", False, "fill"),
-        ("textbox", True, "click"),
-    ],
-)
-def test_checkbox_is_not_a_text_field(monkeypatch, role, readonly, kind):
+def test_observation_is_one_atomic_browser_read(monkeypatch):
     import jev_ultrafast.browser as browser
 
-    def cdp(method, **kwargs):
-        if method == "Runtime.evaluate":
-            value = (
-                [1, "url", 1]
-                if kwargs["expression"] == browser.MARKER
-                else {"url": "url", "title": "test", "w": 100, "h": 100, "scroll": {"y": 0, "height": 100}}
-            )
-            return {"result": {"value": value}}
-        if method == "Accessibility.getFullAXTree":
-            return {"nodes": [{"backendDOMNodeId": 1, "role": {"value": role}, "name": {"value": "Field"}}]}
-        raise AssertionError(method)
-
+    p = page()
+    cdp = Mock(return_value={"result": {"value": p}})
     monkeypatch.setattr(browser, "cdp", cdp)
-    p = browser_operation(
-        {
-            "operation": "observe",
-            "session": "test",
-            "screenshot": False,
-            "layout": lambda *_: {
-                1: {"x": 0, "y": 0, "w": 20, "h": 20, "tag": "INPUT", "attrs": {"readonly": readonly}, "options": []}
-            },
-        }
-    )
-    assert p["actions"][0]["kind"] == kind
+    actual = browser_operation({"operation": "observe", "session": "test", "screenshot": False})
+    assert actual["actions"] == p["actions"]
+    assert cdp.call_count == 1
+    assert cdp.call_args.args[0] == "Runtime.evaluate"
+
+
+def test_executor_rejects_a_stale_page_before_browser_input(monkeypatch):
+    import jev_ultrafast.browser as browser
+
+    b = browser.Browser.__new__(browser.Browser)
+    b.fresh = Mock(return_value=False)
+    operation = Mock()
+    monkeypatch.setattr(browser, "browser_operation", operation)
+    with pytest.raises(StalePage):
+        b.act(page()["actions"][0], page(), "book")
+    operation.assert_not_called()
+
+
+@pytest.mark.parametrize("response", [{"exceptionDetails": {}}, {"result": {}}])
+def test_interrupted_dropdown_mutation_cannot_be_retried_as_stale(monkeypatch, response):
+    import jev_ultrafast.browser as browser
+
+    # A navigation can destroy the evaluation result after the change event already fired.
+    if "exceptionDetails" in response:
+        response["exceptionDetails"] = {"text": "Execution context destroyed"}
+    cdp = Mock(return_value=response)
+    monkeypatch.setattr(browser, "cdp", cdp)
+    with pytest.raises(RuntimeError, match="Dropdown execution"):
+        browser_operation({"operation": "act", "session": "test", "action": {
+            "id": "e1", "kind": "select", "node": 1, "value": "Design",
+        }})
+    assert cdp.call_count == 1
 
 
 def test_fingerprint_tracks_values_and_identity_not_screenshots():

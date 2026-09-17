@@ -1,6 +1,7 @@
 """A measured live run with continuous CDP screencast; original timestamps retained."""
 
 import base64
+import hashlib
 import json
 import sys
 import threading
@@ -14,7 +15,12 @@ from examples.flights import GOALS, URL, verify  # noqa: E402
 from jev_ultrafast import Agent  # noqa: E402
 
 folder = Path(sys.argv[1] if len(sys.argv) > 1 else "artifacts/flights/recorded")
-folder.mkdir(parents=True, exist_ok=True)
+folder.mkdir(parents=True, exist_ok=False)
+source_hashes = {
+    p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+    for p in (Path(__file__).resolve().parents[1] / "jev_ultrafast").iterdir()
+    if p.suffix in {".py", ".js"}
+}
 agent = Agent(URL, GOALS)
 (folder / "frames").mkdir(exist_ok=True)
 (folder / "frames" / "000000.jpg").write_bytes(
@@ -57,7 +63,9 @@ finally:
     worker.join(timeout=3)
     agent.browser.call("Page.stopScreencast")
     state = agent.snapshot()
-    state["verification"] = verify(state["page"])
+    state["final_page"] = agent.browser.observe(screenshot=False)
+    state["verification"] = verify(state["final_page"])
+    state["source_hashes"] = source_hashes
     state["recording_errors"] = errors
     (folder / "state.json").write_text(json.dumps(state, indent=2))
     (folder / "session.json").write_text(json.dumps({"target": agent.browser.target, "session": agent.browser.session}))

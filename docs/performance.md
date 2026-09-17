@@ -1,52 +1,55 @@
-# Real tasks, dynamic actions
+# Faster on the real web
 
-The current agent accepts one natural-language goal, indexes the live page, and asks TypeSafe for an operation plus operation-specific targets in one request. A small LLM generates text. There are no prepared browser steps or quoted-value extraction in these runs.
+The current video completes the Google Flights task in **7.073 seconds at 1×**. It starts with one natural-language goal and uses dynamic controls throughout. Jev selects operation + target in one request; Mercury generates the city strings when TYPE_TEXT is selected.
 
-| Recorded smoke | Agent time | Jev requests | Text-model calls | Independent result |
-| --- | ---: | ---: | ---: | --- |
-| Google Flights: Zürich → London, one way, 20 September 2026 | **11.387 s** | 23 | 2 | Route, date, year, one-way setting, visible flights checked |
-| Wikipedia: open Gödel’s incompleteness theorems | **3.678 s** | 3 | 1 | Exact destination article URL checked |
+[Video](demo.mp4) · [Recording measurements](flights-measurement.json) · [Matched run measurements](full-speed-measurement.json)
 
-[Google Flights recording](demo.mp4) · [Machine-readable evidence](flights-measurement.json)
+## Matched runtime comparison
 
-These are two live smoke tasks, not a broad benchmark or a matched causal speed claim. They used an existing Chrome profile, live network responses, and caches. The policy is site-independent; the outcome checks are task-specific and are not shown to the model.
+Six alternating runs, one task, one existing Chrome profile. Both arms used the same natural-language goal, independent result checker, 1120×780 viewport, TypeSafe `jev-1.13.0`, `inception/mercury-2.5`, disabled text reasoning, and action/request budgets. Initial navigation is excluded in both arms. Each run creates and closes its own tab. All six attempts are included; no provider or verification failures occurred.
 
-## Recorded flight run
+| Pair | Original runtime | Optimized runtime | Verified |
+| --- | ---: | ---: | --- |
+| 1 | 11.214 s | 6.964 s | Both |
+| 2 | 8.984 s | 7.913 s | Both |
+| 3 | 9.450 s | 7.092 s | Both |
+| **Median** | **9.450 s** | **7.092 s** | **3/3 each** |
 
-The clock starts with the first prediction, after the generic Google Flights homepage is observed. It ends at the final DONE choice. It includes generated text, model requests, browser operations, observation, discarded stale decisions, and loading waits. Initial navigation, browser setup, and independent post-run checks are outside the clock.
+The optimized runtime was faster in all three pairs. Median task time was **25.0% lower**, median TypeSafe requests fell **22 → 17**, and median browser protocol calls fell **1,092 → 101**. Three pairs are too few for a strong statistical claim (two-sided sign-test p = 0.25). This is a small controlled-input comparison, not a broad agent benchmark; Google, network responses, routing, and browser caches remain live.
 
-- TypeSafe: `jev-1.13.0`, 23 requests, 175 ms median, 4,160 ms total request time.
-- Text helper: `google/gemini-2.5-flash-lite`, JSON output, reasoning disabled.
-- Generated values: Zurich in 873 ms; London in 590 ms. Two actual helper requests.
-- Browser: 10 interactions and one explicit wait. Additional loading was observed during freshness recovery.
-- Video: 309 continuous screencast frames at original timestamps. 1× playback, with a 750 ms intro and 2-second final hold. Every frame crops out the Google account/navigation strip.
+The original arm is the frozen source from `68c077bf79caca4e817b8e8a5854b2efa0c81ff6`. Both arms use Mercury so the runtime comparison does not conflate a helper-model change with code changes. Per-run source hashes, model settings, token counts, helper costs, browser version, protocol counts, and verification results are in the measurement JSON.
 
-Observed results included easyJet ZRH → LGW, 16:45–17:35, $216; British Airways/BA Cityflyer ZRH → LCY, 20:25–21:00, $265; and British Airways ZRH → LHR, 13:20–14:20, $271. These are observed fares, not a guarantee of current or cheapest pricing. No flight was selected or booked.
+## Where the time went
 
-## Changes and failures retained
+The original loop invalidated decisions on every DOM mutation, including animations. It also read the accessibility tree repeatedly and resolved hundreds of DOM nodes. The new snapshot reads common HTML/ARIA controls in one browser call. Click guards compare the selected target and nearby context, plus document/form state. Current geometry and hit-testing still run before input.
 
-The audit found blocking screenshots in a text-only policy, repeated whole-DOM copies, and hidden-tab animation throttling. Reading current geometry for cached candidate nodes reduced a settled Google homepage observation from roughly 100 ms to 30 ms in the local probe. Removing screenshots initially broke menus because Chrome throttled hidden rendering; focus emulation fixed that cause without switching the visible tab.
+A brief event-based combobox wait lets suggestions arrive before asking Jev to choose from an incomplete popup. Text comes from an actual LLM: the recorded run generated **Zurich in 581 ms** and **London in 346 ms**. Native text replacement was also fixed to issue the browser's select-all command explicitly.
 
-A first natural-goal flight run took 15.580 s with unnecessary waits after the form was ready. The next took 13.753 s using GLM. The first continuous recording with Gemini took 13.152 s. The final run took 11.387 s after reducing page text to the visible viewport. These changed-code/provider development attempts are **not matched performance comparisons**.
+The recording contains **17 Jev requests**, **10 interactions plus one explicit WAIT**, and **two helper calls**. Median Jev latency was **178 ms**. Search executed at **5.217 s**; final verified completion was **7.073 s**. That final interval includes Google's results loading, state changes, and the completion decision. It stays in the video.
 
-Wikipedia initially hit a transient document-evaluation error during navigation. After adding read-only navigation recovery, it completed in 11.645 s; the final visible-context version completed in 3.678 s. Provider latency and page context changed, so the difference is not attributed solely to the code.
+Timing begins at the first prediction after initial homepage observation and ends at the accepted DONE choice. It includes text generation, model requests, browser work, stale decisions, and loading. Browser setup, initial navigation, and fresh independent post-run verification are outside the clock. The video contains 186 continuous screencast frames plus the initial screenshot, uses original timestamps, has no opening hold, and adds a 0.5-second final hold. Only the top account/navigation strip is cropped.
 
-Text-helper probes also rejected two tempting shortcuts: Llama 3.1 8B returned the destination for an origin field, and a Qwen route emitted commentary. The helper now requires exactly one valid JSON `text` field and stops before typing malformed output. This validates the output format, not the semantic correctness of every generated value.
+The recording reports 90,558 TypeSafe input tokens and 6,325 output tokens across all requests. OpenRouter reported **$0.00006272** for the two text calls. That is the text-helper charge, not total task cost: the TypeSafe responses contain token counts without a billed dollar amount, and browser costs are excluded.
 
-### Filter regression after the recording
+## Other checks
 
-A local hotel fixture exposed a policy failure: the agent opened a matching property before applying requested filters, returned to the list repeatedly, and could report DONE with unmet requirements. One earlier attempt reached the 60-action limit. The diagnostic runner now writes its trace even on exceptions and retains separate attempt directories.
+| Task | Time | Independent result |
+| --- | ---: | --- |
+| Wikipedia: open Gödel’s incompleteness theorems | 2.798 s | Exact article URL |
+| Local hotel fixture: search Lisbon, Design, Free cancellation, open Casa Flora | 1.896 s | Property plus all three applied filters |
 
-The target question lacked the operation question's next-step rules. Both now receive the same rules; each target also includes checked/selected state directly. A further rule distinguishes typing into a search field from submitting that search. This keeps the policy generic, with no hotel selectors or prepared browser steps.
+These are separate smoke checks, not matched speed comparisons. Local browser checks cover moved/replaced/hidden/disabled controls, field and checkbox properties, changed nearby context, overlay blocking, native-select execution, real text replacement, autocomplete arrival, and navigation. Offline tests cover the model contract, stale retries, interrupted mutations, helper validation, and independent trip verification.
 
-After these changes, the original task, “Find a Design stay in Lisbon with Free cancellation and open Casa Flora,” passed in **4.404 s**, with six Jev requests, one text-helper call, and five actions. An explicitly worded search/filter task passed in **1.846 s**. Both independently checked the final property and all three applied filters. The original wording's pre-fix failure is retained; the explicit wording is a separate diagnostic, not a matched improvement claim.
+After the timed runs, native-select interruption handling was tightened: uncertain mutation results stop instead of being treated as retryable stale reads. Flights does not exercise native SELECT. Its timing and recording hashes are retained unchanged; the final failure path is covered by offline fault injection and local browser checks.
 
-The final policy then passed the same Google Flights task in **12.898 s**, with 23 Jev requests and two text-helper calls. Route, date, year, one-way setting, and visible results passed a fresh post-run observation. The **11.387 s video predates this filter-policy change**; its original source hashes remain in the recording manifest, alongside the separate final-policy regression hashes. These are development smoke runs, not a reliability estimate.
+## Development attempts retained
 
-## Historical prepared demo
+Before freezing the candidate, the original runtime passed once in 9.302 s. Two accessibility-tree/semantic-guard candidates took 9.395 s and 10.157 s. The first direct-DOM candidate took 8.697 s but failed independent verification because name/value extraction was incomplete. Recursive labels and combobox values fixed that failure; subsequent verified diagnostics took 8.051, 8.631, 8.395, 8.385, and 7.741 s. A Mercury diagnostic passed in 7.559 s. These are changed-code development attempts, not the matched comparison above.
 
-The original 12.884-second flight demo used five hand-written goal steps and copied quoted city strings. It is not the current architecture. Its measurements remain in [flights-prepared-measurement.json](flights-prepared-measurement.json) and [performance-prepared.md](performance-prepared.md). The earlier 1.086–1.311-second hotel runs were authored local fixtures, documented in [measurement.json](measurement.json).
+A six-call helper probe used the two real flight-field contexts with Gemini 2.5 Flash Lite, Gemini 3.1 Flash Lite, and Mercury 2.5. All returned the correct values in this tiny probe. Mercury then passed the live Flights, Wikipedia, and local filter checks. This does not establish general semantic accuracy. Earlier probes had rejected a model that swapped origin/destination and another that emitted commentary instead of valid JSON.
 
-## Remaining limits
+The previous 11.387-second recording and post-recording 12.898-second policy regression are described in the [original performance report](https://github.com/browser-use/jev-ultrafast/blob/68c077bf79caca4e817b8e8a5854b2efa0c81ff6/docs/performance.md). The older prepared-step prototype remains in [performance-prepared.md](performance-prepared.md). Raw attempts and original-timestamp frames remain in ignored local artifacts.
 
-A DONE choice is not independent evidence of success. The action space is capped and can omit elements; frames, canvas, uploads, pop-up tabs, nested scrolling, and arbitrary keyboard controls are unsupported. The two successful tasks demonstrate the same runtime on two sites, not broad generalization or production reliability.
+## Limits
+
+This DOM reader supports common HTML and ARIA controls; it does not implement the full accessible-name algorithm or traverse shadow roots/frames. Scoped click guards deliberately allow unrelated visible updates. Canvas, uploads, new tabs, nested scrolling, and arbitrary keyboard widgets remain unsupported. A valid operation can still be wrong, and DONE is never independent evidence of success.

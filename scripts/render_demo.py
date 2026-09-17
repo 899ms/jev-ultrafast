@@ -1,5 +1,6 @@
 """Render the actual Google Flights screencast at 1x, including every loading wait."""
 
+import argparse
 import json
 import statistics
 import subprocess
@@ -8,14 +9,17 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
-source = ROOT / "artifacts/dynamic/flights-final"
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("source", type=Path, help="Exact verified recording directory")
+args = parser.parse_args()
+source = args.source.resolve()
 state = json.loads((source / "state.json").read_text())
 assert state["verification"]["passed"] and not state["recording_errors"]
 frames = [(0, Image.open(source / "frames/000000.jpg").convert("RGB"))]
 frames += sorted((int(p.stem), Image.open(p).convert("RGB")) for p in (source / "screencast").glob("*.jpg"))
 end = state["elapsed_ms"]
-folder = ROOT / "artifacts/dynamic/video-frames"
-folder.mkdir(parents=True, exist_ok=True)
+folder = source / "video-frames"
+folder.mkdir(parents=True, exist_ok=False)
 font_path = "/System/Library/Fonts/Supplemental/Arial.ttf"
 font_bold = "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
 
@@ -36,8 +40,8 @@ steps = [
     ("20 September", "Done. Search"),
     ("Search flights", "Search"),
 ]
-for i in range(round((end + 2750) * 30 / 1000)):
-    t = min(end, max(0, round(i * 1000 / 30) - 750))
+for i in range(round((end + 500) * 30 / 1000)):
+    t = min(end, round(i * 1000 / 30))
     screenshot = next(im for ts, im in reversed(frames) if ts <= t)
     canvas = Image.new("RGB", (1536, 1000), "#f3f4ec")
     d = ImageDraw.Draw(canvas)
@@ -85,7 +89,8 @@ for i in range(round((end + 2750) * 30 / 1000)):
     d.line((37, 960, 37 + (1498 - 37) * t / end, 960), fill=green, width=3)
     d.text(
         (37, 973),
-        "Operation + index by Jev. Text by Gemini Flash Lite. Original timing; waits included.",
+        f"Operation + index by Jev. Text by {state['text_calls'][0]['model'].split('/')[-1]}. "
+        "Original timing; waits included.",
         font=font(14),
         fill=muted,
     )
@@ -130,4 +135,4 @@ subprocess.run(
     ],
     check=True,
 )
-print("Rendered", len(frames), "source frames at original timing:", end, "ms, plus 750ms intro and 2000ms end hold.")
+print("Rendered", len(frames), "source frames at original timing:", end, "ms, plus a 500ms end hold.")
